@@ -69,6 +69,7 @@ const rhythmSymbolMap = {
     '⑮': 15,
     '⑯': 16
 };
+const rhyhthmSymbolList = [...Object.keys(rhythmSymbolMap), '口'];
 function getRhythmTimings(section, barTiming, numBar) {
     // Split and clean lines
     const lines = section.split(lineBreakType).map(elem => elem.trim());
@@ -87,52 +88,47 @@ function getRhythmTimings(section, barTiming, numBar) {
     return rhythm.getMappedTimings(barTiming, numBar);
 }
 function getHoldStartPos(block, index) {
-    let offset = 0;
-    let searchSymbol = '';
-    if (index % 4 !== 0) {
-        if (block[index - 1] === '―') {
-            offset = -1;
-            searchSymbol = '＞';
+    // search down
+    for (let i = index + 4; i < 16; i += 4) {
+        // break if there is no arrow path
+        if (rhyhthmSymbolList.includes(block[i]) || block[i] === '―') {
+            break;
         }
-        else if (block[index - 1] === '＞') {
-            return index - 1;
-        }
-    }
-    if (index % 4 !== 3) {
-        if (block[index + 1] === '―') {
-            offset = 1;
-            searchSymbol = '＜';
-        }
-        else if (block[index + 1] === '＜') {
-            return index + 1;
-        }
-    }
-    if (index <= 11) {
-        if (block[index + 4] === '｜') {
-            offset = 4;
-            searchSymbol = '∧';
-        }
-        else if (block[index + 4] === '∧') {
-            return index + 4;
-        }
-    }
-    if (index >= 4) {
-        if (block[index - 4] === '｜') {
-            offset = -4;
-            searchSymbol = '∨';
-        }
-        else if (block[index - 4] === '∨') {
-            return index - 4;
-        }
-    }
-    if (offset === 0) {
-        return -1;
-    }
-    for (let i = index + (offset * 2); i < 16 && i >= 0; i += offset) {
-        if (block[i] === searchSymbol) {
+        if (block[i] === '∧') {
             return i;
         }
     }
+    // search up
+    for (let i = index - 4; i >= 0; i -= 4) {
+        // break if there is no arrow path
+        if (rhyhthmSymbolList.includes(block[i]) || block[i] === '―') {
+            break;
+        }
+        if (block[i] === '∨') {
+            return i;
+        }
+    }
+    // search left
+    for (let i = index - 1; i % 4 !== 3 && i >= 0; i--) {
+        // break if there is no arrow path
+        if (rhyhthmSymbolList.includes(block[i]) || block[i] === '｜') {
+            break;
+        }
+        if (block[i] === '＞') {
+            return i;
+        }
+    }
+    // search right
+    for (let i = index + 1; i % 4 !== 0 && i < 16; i++) {
+        // break if there is no arrow path
+        if (rhyhthmSymbolList.includes(block[i]) || block[i] === '｜') {
+            break;
+        }
+        if (block[i] === '＜') {
+            return i;
+        }
+    }
+    return -1;
 }
 // Encode start and hold in binary
 // Make negative to easily check if pos is encoded hold
@@ -267,6 +263,19 @@ function stripHeader(memo) {
     const index = memo.search(new RegExp(lineBreakType + '1' + lineBreakType));
     return memo.slice(index);
 }
+function countNotes(ticks) {
+    let noteCount = 0;
+    let holdCount = 0;
+    for (const tick of ticks) {
+        if (tick.notes != null) {
+            noteCount += tick.notes.length;
+        }
+        if (tick.holds != null) {
+            holdCount += tick.holds.length;
+        }
+    }
+    return { noteCount, holdCount };
+}
 function parseMemo(memo, parsedFileName) {
     lineBreakType = getLineBreakType(memo);
     memo = memo.trim();
@@ -282,7 +291,6 @@ function parseMemo(memo, parsedFileName) {
         memson.charts = {};
     }
     else {
-        console.log('exists');
         memson = JSON.parse(fs_1.readFileSync(parsedFileName, { encoding: 'utf-8' }));
     }
     const diffCat = lines[3].trim().toLowerCase();
@@ -293,6 +301,9 @@ function parseMemo(memo, parsedFileName) {
     };
     const sections = splitIntoSections(stripHeader(memo));
     memson.charts[diffCat].ticks = extractTimings(memson.bpm, sections);
+    const { noteCount, holdCount } = countNotes(memson.charts[diffCat].ticks);
+    memson.charts[diffCat].noteCount = noteCount;
+    memson.charts[diffCat].holdCount = holdCount;
     return memson;
 }
 function parseAndWrite(filepath) {

@@ -3,6 +3,8 @@
 This script converts cosmos memo files to a more usable
 JSON format with sorted timestamps.
 
+For documentation on the file format see `src/memson.ts`.
+
 ## Usage
 
 The ready to use `index.js` can be found in the dist directory.

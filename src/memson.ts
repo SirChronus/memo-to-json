@@ -28,6 +28,14 @@ export interface Memson {
 export interface Chart {
 	/** Chart's difficulty (e.g. 8 or 10.2) */
 	difficulty: number;
+	/**
+	 * Number of normal notes.
+	 * 
+	 * For total note count like arcade: noteCount + 2 * holdCount
+	 */
+	noteCount: number;
+	/** Number of hold notes */
+	holdCount: number
 	/** Timing data for notes and holds */
 	ticks: Tick[];
 }

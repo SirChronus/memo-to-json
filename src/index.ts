@@ -84,7 +84,8 @@ const rhythmSymbolMap: { [index: string]: number } = {
 	'⑭': 14,
 	'⑮': 15,
 	'⑯': 16
-}
+};
+const rhyhthmSymbolList = [...Object.keys(rhythmSymbolMap), '口'];
 
 function getRhythmTimings(section: string, barTiming: number, numBar: number): number[] {
 	// Split and clean lines
@@ -107,51 +108,55 @@ function getRhythmTimings(section: string, barTiming: number, numBar: number): n
 }
 
 function getHoldStartPos(block: string, index: number): number {
-	let offset = 0;
-	let searchSymbol = '';
+	// search down
+	for (let i = index + 4; i < 16; i += 4) {
+		// break if there is no arrow path
+		if (rhyhthmSymbolList.includes(block[i]) || block[i] === '―') {
+			break;
+		}
 
-	if (index % 4 !== 0) {
-		if (block[index - 1] === '―') {
-			offset =  -1;
-			searchSymbol = '＞';
-		} else if (block[index - 1] === '＞') {
-			return index - 1;
-		}
-	}
-	if (index % 4 !== 3) {
-		if (block[index + 1] === '―') {
-			offset =  1;
-			searchSymbol = '＜';
-		} else if (block[index + 1] === '＜') {
-			return index + 1;
-		}
-	}
-	if (index <= 11) {
-		if (block[index + 4] === '｜') {
-			offset = 4;
-			searchSymbol = '∧'
-		} else if (block[index + 4] === '∧') {
-			return index + 4;
-		}
-	}
-	if (index >= 4) {
-		if (block[index - 4] === '｜') {
-			offset = -4;
-			searchSymbol = '∨'
-		} else if (block[index - 4] === '∨') {
-			return index - 4;
-		}
-	}
-
-	if (offset === 0) {
-		return -1;
-	}
-
-	for (let i = index + (offset * 2); i < 16 && i >= 0; i += offset) {
-		if (block[i] === searchSymbol) {
+		if (block[i] === '∧') {
 			return i;
 		}
 	}
+
+	// search up
+	for (let i = index - 4; i >= 0; i -= 4) {
+		// break if there is no arrow path
+		if (rhyhthmSymbolList.includes(block[i]) || block[i] === '―') {
+			break;
+		}
+
+		if (block[i] === '∨') {
+			return i;
+		}
+	}
+
+	// search left
+	for (let i = index - 1; i % 4 !== 3 && i >= 0; i--) {
+		// break if there is no arrow path
+		if (rhyhthmSymbolList.includes(block[i]) || block[i] === '｜') {
+			break;
+		}
+
+		if (block[i] === '＞') {
+			return i;
+		}
+	}
+
+	// search right
+	for (let i = index + 1; i % 4 !== 0 && i < 16; i++) {
+		// break if there is no arrow path
+		if (rhyhthmSymbolList.includes(block[i]) || block[i] === '｜') {
+			break;
+		}
+
+		if (block[i] === '＜') {
+			return i;
+		}
+	}
+
+	return -1;
 }
 
 // Encode start and hold in binary
@@ -305,6 +310,23 @@ function stripHeader(memo: string): string {
 	return memo.slice(index);
 }
 
+function countNotes(ticks: Tick[]): { noteCount: number; holdCount: number; } {
+	let noteCount = 0;
+	let holdCount = 0;
+
+	for (const tick of ticks) {
+		if (tick.notes != null) {
+			noteCount += tick.notes.length;
+		}
+
+		if (tick.holds != null) {
+			holdCount += tick.holds.length;
+		}
+	}
+
+	return { noteCount, holdCount };
+}
+
 function parseMemo(memo: string, parsedFileName: string): Memson {
 	lineBreakType = getLineBreakType(memo);
 	memo = memo.trim();
@@ -320,7 +342,6 @@ function parseMemo(memo: string, parsedFileName: string): Memson {
 		memson.jacket = memson.title + '.png';
 		memson.charts = {};
 	} else {
-		console.log('exists');
 		memson = JSON.parse(readFileSync(parsedFileName, { encoding: 'utf-8' }));
 	}
 
@@ -333,6 +354,9 @@ function parseMemo(memo: string, parsedFileName: string): Memson {
 
 	const sections = splitIntoSections(stripHeader(memo));
 	memson.charts[diffCat].ticks = extractTimings(memson.bpm, sections);
+	const { noteCount, holdCount } = countNotes(memson.charts[diffCat].ticks);
+	memson.charts[diffCat].noteCount = noteCount;
+	memson.charts[diffCat].holdCount = holdCount;
 
 	return memson as Memson;
 }
