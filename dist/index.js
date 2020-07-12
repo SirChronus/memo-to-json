@@ -2,6 +2,18 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs_1 = require("fs");
 const path_1 = require("path");
+function getLineBreakType(memo) {
+    const indexOfLF = memo.indexOf('\n', 1); // No need to check first-character
+    if (indexOfLF === -1) {
+        if (memo.indexOf('\r') !== -1)
+            return '\r';
+        return '\n';
+    }
+    if (memo[indexOfLF - 1] === '\r')
+        return '\r\n';
+    return '\n';
+}
+let lineBreakType;
 // Use class to keep everything a bit more confined
 class Rhythm {
     constructor() {
@@ -30,7 +42,7 @@ class Rhythm {
                 break;
             }
             // Trim to 100th of a millisecond (probably too precise anyways)
-            timings.push(Math.round(offset + barTiming * numBar * 100) / 100);
+            timings.push(Math.round((offset + barTiming * numBar) * 100) / 100);
         }
         return timings;
     }
@@ -59,7 +71,7 @@ const rhythmSymbolMap = {
 };
 function getRhythmTimings(section, barTiming, numBar) {
     // Split and clean lines
-    const lines = section.split('\n').map(elem => elem.trim());
+    const lines = section.split(lineBreakType).map(elem => elem.trim());
     const rhythm = new Rhythm();
     for (const line of lines) {
         const rhythmLine = line.match(/\|(.*?)\|/);
@@ -131,9 +143,9 @@ function decodeHold(pos) {
     return { from: ((-pos) & 0b1111), to: ((-pos) >> 4) };
 }
 function getPositions(section) {
-    const blocks = section.split('\r\n\r\n')
+    const blocks = section.split(lineBreakType + lineBreakType)
         .map(block => {
-        return block.split('\n').map(line => {
+        return block.split(lineBreakType).map(line => {
             var _a, _b;
             let retVal = line.trim();
             return (_b = (_a = retVal.match(/(.*?)\s\|/)) === null || _a === void 0 ? void 0 : _a[1]) !== null && _b !== void 0 ? _b : retVal;
@@ -240,7 +252,7 @@ function splitIntoSections(memo) {
     let stringIndex = memo.indexOf(index.toString());
     const sections = [];
     while (stringIndex >= 0) {
-        const oldIndex = stringIndex + index.toString().length + 2;
+        const oldIndex = stringIndex + index.toString().length + lineBreakType.length;
         index++;
         let end = memo.indexOf(index.toString());
         stringIndex = end;
@@ -252,21 +264,29 @@ function splitIntoSections(memo) {
     return sections;
 }
 function stripHeader(memo) {
-    const index = memo.search(/1\r\n/);
+    const index = memo.search(new RegExp(lineBreakType + '1' + lineBreakType));
     return memo.slice(index);
 }
-function parseMemo(memo) {
-    const memson = {};
-    const lines = memo.split('\n');
-    memson.title = lines[0].trim();
-    memson.artist = lines[1].trim();
-    memson.bpm = parseInt(memo.match(/BPM:\s(\d+)/)[1]);
-    memson.audio = '';
-    memson.offset = -1;
-    memson.jacket = '';
+function parseMemo(memo, parsedFileName) {
+    lineBreakType = getLineBreakType(memo);
+    memo = memo.trim();
+    let memson = {};
+    const lines = memo.split(lineBreakType);
+    if (!fs_1.existsSync(parsedFileName)) {
+        memson.title = lines[0].trim();
+        memson.artist = lines[1].trim();
+        memson.bpm = parseInt(memo.match(/BPM:\s(\d+)/)[1]);
+        memson.audio = memson.title + '.mp3';
+        memson.offset = -1;
+        memson.jacket = memson.title + '.png';
+        memson.charts = {};
+    }
+    else {
+        console.log('exists');
+        memson = JSON.parse(fs_1.readFileSync(parsedFileName, { encoding: 'utf-8' }));
+    }
     const diffCat = lines[3].trim().toLowerCase();
     const diff = parseInt(memo.match(/Level:\s(\d+)/)[1]);
-    memson.charts = {};
     memson.charts[diffCat] = {
         difficulty: diff,
         ticks: []
@@ -275,21 +295,34 @@ function parseMemo(memo) {
     memson.charts[diffCat].ticks = extractTimings(memson.bpm, sections);
     return memson;
 }
-if (process.argv.length < 4) {
-    console.error('Usage: node index.js [path-to-memo] [outfile-name] <pretty>');
+function parseAndWrite(filepath) {
+    const parsedFileName = path_1.join(path_1.dirname(filepath), path_1.basename(filepath).replace(/_(adv|ext|bsc)/, '').replace(/\.memo|\.txt/, '') + '.json');
+    const memson = parseMemo(fs_1.readFileSync(filepath, { encoding: 'utf-8' }), parsedFileName);
+    let outstring;
+    if (process.argv[3] === 'true') {
+        outstring = JSON.stringify(memson, null, 2);
+    }
+    else {
+        outstring = JSON.stringify(memson);
+    }
+    fs_1.writeFileSync(parsedFileName, outstring);
+}
+if (process.argv.length < 3) {
+    console.error('Usage: node index.js [path-to-memo] <pretty>');
     process.exit(1);
 }
-const memson = parseMemo(fs_1.readFileSync(path_1.resolve(process.argv[2]), { encoding: 'utf-8' }));
-let outstring;
-if (process.argv[4] === 'true') {
-    outstring = JSON.stringify(memson, null, 2);
+const filepath = path_1.resolve(process.argv[2]);
+const stats = fs_1.lstatSync(filepath);
+if (stats.isDirectory()) {
+    const entries = fs_1.readdirSync(filepath, { withFileTypes: true });
+    for (const entry of entries) {
+        if (entry.isFile() && (entry.name.endsWith('.memo') || entry.name.endsWith('.txt'))) {
+            parseAndWrite(path_1.join(filepath, entry.name));
+            console.log(`Parsed ${entry.name}`);
+        }
+    }
 }
 else {
-    outstring = JSON.stringify(memson);
+    parseAndWrite(filepath);
 }
-let outfile = process.argv[3];
-if (!outfile.endsWith('.json')) {
-    outfile += '.json';
-}
-fs_1.writeFileSync(outfile, outstring);
 console.log('Parsed sucessfully. Fields "offset", "jacket" and "audio" need to be filled in manually.');

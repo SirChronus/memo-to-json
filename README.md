@@ -12,8 +12,26 @@ Make sure you have the `node runtime >=10` installed. No other dependecies are n
 To parse a memo file to json simply navigate to the projects directory and execute following command:
 
 ```bash
-node dist/index.js [path-to-memo] [outfile-name] <pretty>
+node dist/index.js [path-to-memo-or-dir] <pretty>
 ```
+
+The path can either be a single file or a directory containing memo files.
+File names should be in the following format.
+
+`some_name_(bsc|adv|ext).(memo|txt)`
+
+Example file names:
+
+```text
+awesome_song_adv.memo
+another_cool_song.txt
+```
+
+Output file name is the input file name with a `.json` ending and the difficulty reference removed. So for an input of `awesome_song_adv.memo` and output file with the name `awesome_song.json` will be created.
+
+If a json file with the correct name for the same song already exists, then the chart information for another difficulty will be appended.
+
+E.g. `awesome_song.json` already exists and contains the `adv` chart. If `awesome_song_ext.memo` is parsed after that, then the `ext` chart data will be appended to `awesome_song.json`.
 
 The option `pretty` is optional and takes either `true` or `false` as input. If set to `true` it will stringify the JSON in a more readable way but this takes up more file space.
 
