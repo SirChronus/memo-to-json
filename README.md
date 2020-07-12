@@ -14,7 +14,7 @@ Make sure you have the `node runtime >=10` installed. No other dependecies are n
 To parse a memo file to json simply navigate to the projects directory and execute following command:
 
 ```bash
-node dist/index.js [path-to-memo-or-dir] <pretty>
+node dist/index.js [path-to-memo-or-dir] <pretty> <folderize>
 ```
 
 The path can either be a single file or a directory containing memo files.
@@ -36,6 +36,8 @@ If a json file with the correct name for the same song already exists, then the 
 E.g. `awesome_song.json` already exists and contains the `adv` chart. If `awesome_song_ext.memo` is parsed after that, then the `ext` chart data will be appended to `awesome_song.json`.
 
 The option `pretty` is optional and takes either `true` or `false` as input. If set to `true` it will stringify the JSON in a more readable way but this takes up more file space.
+
+With `folderize` set to true, the parser will output the file into a subfolder with the same name as the parsed memo.
 
 ## Notes on memo format
 

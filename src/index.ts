@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { lstatSync, readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { basename, dirname, join, resolve, parse } from 'path';
 import type { Chart, DifficultyCategory, Hold, Memson, Tick } from './memson';
 
@@ -18,6 +18,9 @@ function getLineBreakType(memo: string): string {
 
 let lineBreakType: string;
 
+let sectionOffsets: number[] = [];
+let sectionTimings: number[] = [];
+
 interface RhythmLine {
 	/** Number of dashes in rhythm. Usually 4 sometimes 8 or 6 or 2 */
 	division: number;
@@ -29,12 +32,12 @@ interface RhythmLine {
 class Rhythm {
 	lines: RhythmLine[] = [];
 
-	private getRhythmOffset(note: number, barTiming: number): number {
+	private getRhythmOffset(note: number, timing: number): number {
 		for (let i = 0; i < this.lines.length; i++) {
 			const index = this.lines[i].notes.indexOf(note);
 			if (index >= 0) {
 				// We always have 4 rhythm lines
-				const lineTiming = barTiming / 4;
+				const lineTiming = timing;
 				// Add parentheses for better readability
 				// (lineTiming * i) gets the beat offset for the line
 				// (lineTiming / this.lines[i].division) gets the timing offset inside the line
@@ -46,16 +49,17 @@ class Rhythm {
 		return -1;
 	}
 
-	public getMappedTimings(barTiming: number, numBar: number): number[] {
+	public getMappedTimings(numBar: number): number[] {
 		const timings: number[] = [];
 
 		for (let i = 1; i < 17; i++) {
-			let offset = this.getRhythmOffset(i, barTiming);
+			const timing = sectionTimings[numBar];
+			let offset = this.getRhythmOffset(i, timing);
 			if (offset === -1) {
 				break;
 			}
 			// Trim to 100th of a millisecond (probably too precise anyways)
-			timings.push(Math.round((offset + barTiming * numBar) * 100) / 100);
+			timings.push(Math.round((offset + sectionOffsets[numBar]) * 100) / 100);
 		}
 
 		return timings;
@@ -87,7 +91,7 @@ const rhythmSymbolMap: { [index: string]: number } = {
 };
 const rhyhthmSymbolList = [...Object.keys(rhythmSymbolMap), '口'];
 
-function getRhythmTimings(section: string, barTiming: number, numBar: number): number[] {
+function getRhythmTimings(section: string, numBar: number): number[] {
 	// Split and clean lines
 	const lines = section.split(lineBreakType).map(elem => elem.trim());
 	const rhythm = new Rhythm();
@@ -104,7 +108,7 @@ function getRhythmTimings(section: string, barTiming: number, numBar: number): n
 		}
 	}
 
-	return rhythm.getMappedTimings(barTiming, numBar);
+	return rhythm.getMappedTimings(numBar);
 }
 
 function getHoldStartPos(block: string, index: number): number {
@@ -215,12 +219,11 @@ function findIndexWithPos(positions: number[][], startFrom: number, pos: number)
 }
 
 function extractTimings(bpm: number, sections: string[]): Tick[] {
-	let barTiming = 60_000 / bpm * 4;
 	let ticks: Tick[] = [];
 
 	let carriedHolds: (Hold & { indexInTicks: number; indexInHolds: number; })[] = [];
 	for (let i = 0; i < sections.length; i++) {
-		const timings = getRhythmTimings(sections[i], barTiming, i);
+		const timings = getRhythmTimings(sections[i], i);
 		const positions = getPositions(sections[i]);
 
 		if (carriedHolds.length > 0) {
@@ -286,15 +289,15 @@ function extractTimings(bpm: number, sections: string[]): Tick[] {
 	return ticks;
 }
 
-function splitIntoSections(memo: string): string[] {
-	let index = 1;
-	let stringIndex = memo.indexOf(index.toString());
+function splitIntoSections(memo: string, startIndex = 1): string[] {
+	let index = startIndex;
+	let stringIndex = memo.search(new RegExp('^' + index.toString() + lineBreakType, 'gm'));
 	const sections: string[] = [];
 
 	while (stringIndex >= 0) {
 		const oldIndex = stringIndex + index.toString().length + lineBreakType.length;
 		index++;
-		let end = memo.indexOf(index.toString());
+		let end = memo.search(new RegExp('^' + index.toString() + lineBreakType, 'gm'));
 		stringIndex = end;
 		if (end === -1) {
 			end = memo.length;
@@ -305,9 +308,52 @@ function splitIntoSections(memo: string): string[] {
 	return sections;
 }
 
+function splitIntoBPMSections(memo: string): string[] {
+	let stringIndex = memo.indexOf('BPM');
+	const sections: string[] = [];
+
+	while (stringIndex >= 0) {
+		const oldIndex = stringIndex;
+		let end = memo.indexOf('BPM', stringIndex + 3);
+		stringIndex = end;
+		if (end === -1) {
+			end = memo.length;
+		}
+		sections.push(memo.substring(oldIndex, end).trim());
+	}
+
+	return sections;
+}
+
+function calculateTimingsForSection(bpmSection: string, baseBpm?: number) {
+	let bpm = baseBpm;
+	let sections: string[];
+	if (bpm == null) {
+		bpm = parseInt(bpmSection.match(/BPM:\s(\d+)/)[1]);
+		const lineEndingIndex = bpmSection.indexOf(lineBreakType);
+		const startSectionIndex = bpmSection.substring(lineEndingIndex + 1, bpmSection.indexOf(lineBreakType, lineEndingIndex + 1));
+		sections = splitIntoSections(bpmSection.slice(lineEndingIndex), parseInt(startSectionIndex));
+	} else {
+		sections = splitIntoSections(bpmSection);
+	}
+	const lineTiming = 60_000 / bpm;
+	const sectionTimingIndexOffset = sectionTimings.length;
+
+	for (let i = 0; i < sections.length; i++) {
+		const rhythmCount = sections[i].match(/\|(.*?)\|/gm).length;
+		sectionTimings[sectionTimingIndexOffset + i] = lineTiming;
+		sectionOffsets[sectionTimingIndexOffset + 1 + i] = lineTiming * rhythmCount + sectionOffsets[sectionTimingIndexOffset + i];
+	}
+}
+
 function stripHeader(memo: string): string {
-	const index = memo.search(new RegExp(lineBreakType + '1' + lineBreakType));
-	return memo.slice(index);
+	const numberIndex = memo.search(new RegExp(lineBreakType + '1' + lineBreakType));
+	// Search for seconds bpm occurence if it exists
+	const bpmIndex = memo.indexOf('BPM', memo.indexOf('BPM') + 3);
+	if (bpmIndex >= 0 && bpmIndex < numberIndex) {
+		return memo.slice(bpmIndex);
+	}
+	return memo.slice(numberIndex);
 }
 
 function countNotes(ticks: Tick[]): { noteCount: number; holdCount: number; } {
@@ -336,7 +382,11 @@ function parseMemo(memo: string, parsedFileName: string): Memson {
 	if (!existsSync(parsedFileName)) {
 		memson.title = lines[0].trim();
 		memson.artist = lines[1].trim();
-		memson.bpm = parseInt(memo.match(/BPM:\s(\d+)/)[1]);
+		const bpmMatches = memo.match(/BPM:\s(\d+)-?(\d*)/);
+		memson.minBpm = parseInt(bpmMatches[1]);
+		if (bpmMatches.length > 2 && bpmMatches[2] !== '') {
+			memson.maxBpm = parseInt(bpmMatches[2])
+		}
 		memson.audio = memson.title + '.mp3';
 		memson.offset = -1;
 		memson.jacket = memson.title + '.png';
@@ -352,8 +402,19 @@ function parseMemo(memo: string, parsedFileName: string): Memson {
 		ticks: []
 	} as Chart;
 
-	const sections = splitIntoSections(stripHeader(memo));
-	memson.charts[diffCat].ticks = extractTimings(memson.bpm, sections);
+	const memoWithoutHeader = stripHeader(memo);
+	const sections = splitIntoSections(memoWithoutHeader);
+	const bpmSections = splitIntoBPMSections(stripHeader(memo));
+	sectionTimings = [];
+	sectionOffsets = [0];
+	if (bpmSections.length > 0) {
+		for (const bpmSection of bpmSections) {
+			calculateTimingsForSection(bpmSection);
+		}
+	} else {
+		calculateTimingsForSection(memoWithoutHeader, memson.minBpm);
+	}
+	memson.charts[diffCat].ticks = extractTimings(memson.minBpm, sections);
 	const { noteCount, holdCount } = countNotes(memson.charts[diffCat].ticks);
 	memson.charts[diffCat].noteCount = noteCount;
 	memson.charts[diffCat].holdCount = holdCount;
@@ -361,8 +422,19 @@ function parseMemo(memo: string, parsedFileName: string): Memson {
 	return memson as Memson;
 }
 
-function parseAndWrite(filepath: string) {
-	const parsedFileName = join(dirname(filepath), basename(filepath).replace(/_(adv|ext|bsc)/, '').replace(/\.memo|\.txt/, '') + '.json');
+function parseAndWrite(filepath: string, folderize: boolean) {
+	let dir: string;
+	const base = basename(filepath).replace(/_(adv|ext|bsc)/, '').replace(/\.memo|\.txt/, '') ;
+	if (folderize) {
+		dir = join(dirname(filepath), base);
+		if (!existsSync(dir)) {
+			mkdirSync(dir);
+		}
+	} else {
+		dir = dirname(filepath);
+	}
+
+	const parsedFileName = join(dir, base + '.json');
 	const memson = parseMemo(readFileSync(filepath, { encoding: 'utf-8' }), parsedFileName);
 	let outstring: string;
 	if (process.argv[3] === 'true') {
@@ -375,7 +447,7 @@ function parseAndWrite(filepath: string) {
 }
 
 if (process.argv.length < 3) {
-	console.error('Usage: node index.js [path-to-memo] <pretty>');
+	console.error('Usage: node index.js [path-to-memo] <pretty> <folderize>');
 	process.exit(1);
 }
 
@@ -387,12 +459,12 @@ if (stats.isDirectory()) {
 
 	for (const entry of entries) {
 		if (entry.isFile() && (entry.name.endsWith('.memo') || entry.name.endsWith('.txt'))) {
-			parseAndWrite(join(filepath, entry.name));
+			parseAndWrite(join(filepath, entry.name), process.argv[4] === 'true');
 			console.log(`Parsed ${entry.name}`);
 		}
 	}
 } else {
-	parseAndWrite(filepath);
+	parseAndWrite(filepath, process.argv[4] === 'true');
 }
 
 console.log('Parsed sucessfully. Fields "offset", "jacket" and "audio" need to be filled in manually.');

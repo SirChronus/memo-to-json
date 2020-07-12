@@ -7,7 +7,9 @@ export interface Memson {
 	/** Song's artist */
 	artist: string;
 	/** Just used for display purposes since timing is encoded in notes */
-	bpm: number;
+	minBpm: number;
+	/** Used for bpm ranges. If not set, then there is no range and base bpm is minBpm */
+	maxBpm?: number;
 	/** Local path to audio file (relative to this files directory) */
 	audio: string;
 	/** Local path to jacket (relative to this files directory) */
