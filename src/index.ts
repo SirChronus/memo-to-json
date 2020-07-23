@@ -1,6 +1,8 @@
 import { lstatSync, readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { basename, dirname, join, resolve, parse } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import type { Chart, DifficultyCategory, Hold, Memson, Tick } from './memson';
+
+let count = 0;
 
 function getLineBreakType(memo: string): string {
 	const indexOfLF = memo.indexOf('\n', 1);  // No need to check first-character
@@ -329,7 +331,7 @@ function calculateTimingsForSection(bpmSection: string, baseBpm?: number) {
 	let bpm = baseBpm;
 	let sections: string[];
 	if (bpm == null) {
-		bpm = parseInt(bpmSection.match(/BPM:\s(\d+)/)[1]);
+		bpm = parseInt(bpmSection.match(/BPM:?.*?(\d+)/)[1]);
 		const lineEndingIndex = bpmSection.indexOf(lineBreakType);
 		const startSectionIndex = bpmSection.substring(lineEndingIndex + 1, bpmSection.indexOf(lineBreakType, lineEndingIndex + 1));
 		sections = splitIntoSections(bpmSection.slice(lineEndingIndex), parseInt(startSectionIndex));
@@ -373,6 +375,51 @@ function countNotes(ticks: Tick[]): { noteCount: number; holdCount: number; } {
 	return { noteCount, holdCount };
 }
 
+function spliceString(str: string, start: number, delCount: number, newSubString: string): string {
+	return str.slice(0, start) + newSubString + str.slice(start + Math.abs(delCount));
+}
+
+function mergeSplitBeats(memo: string): string {
+	const sections = splitIntoSections(memo);
+	for (let i = 0; i < sections.length; i++) {
+		const beats = sections[i].match(/\|(.*?)\|/gm);
+		if (beats != null) {
+			for (let j = 1; j < beats.length - 1; j++) {
+				if (beats[j].length === 4 && beats[j + 1].length === 4) {
+					const mergeIndex = sections[i].indexOf(beats[j]);
+					sections[i] = spliceString(sections[i], mergeIndex + 3, 0, beats[j + 1].slice(1, -1));
+					const deleteIndex = sections[i].indexOf(beats[j + 1]);
+					sections[i] = spliceString(sections[i], deleteIndex, 4, '');
+				}
+			}
+		}
+
+		sections[i] = `${i + 1}\n${sections[i]}`;
+	}
+
+	return sections.join('\n');
+}
+
+function trimEmptyBars(memo: string): string {
+	const firstBar = memo.slice(1 + lineBreakType.length, memo.indexOf('2')).trim().split(lineBreakType);
+	let emptyLineCount = 0;
+	if (firstBar.length === 4) {
+		for (const line of firstBar) {
+			if (line.includes('口口口口')) {
+				emptyLineCount++;
+			}
+		}
+
+		if (emptyLineCount === 4) {
+			const trimmedMemo = splitIntoSections(memo).slice(1);
+			return trimmedMemo.map((section, index) => `${index + 1}\n${section}`).join('\n');
+		}
+	}
+	// TODO: Trim empty bars at end if needed
+
+	return memo;
+}
+
 function parseMemo(memo: string, parsedFileName: string): Memson {
 	lineBreakType = getLineBreakType(memo);
 	memo = memo.trim();
@@ -387,24 +434,26 @@ function parseMemo(memo: string, parsedFileName: string): Memson {
 		if (bpmMatches.length > 2 && bpmMatches[2] !== '') {
 			memson.maxBpm = parseInt(bpmMatches[2])
 		}
-		memson.audio = memson.title + '.mp3';
+		memson.audio = 'audio.mp3';
 		memson.offset = -1;
-		memson.jacket = memson.title + '.png';
+		memson.jacket = 'jacket.png';
 		memson.charts = {};
 	} else {
 		memson = JSON.parse(readFileSync(parsedFileName, { encoding: 'utf-8' }));
 	}
 
 	const diffCat = lines[3].trim().toLowerCase() as DifficultyCategory;
-	const diff = parseInt(memo.match(/Level:\s(\d+)/)[1]);
+	const diff = parseFloat(memo.match(/Level:\s(\d+\.?\d*)/)[1]);
 	memson.charts[diffCat] = {
 		difficulty: diff,
 		ticks: []
 	} as Chart;
 
-	const memoWithoutHeader = stripHeader(memo);
-	const sections = splitIntoSections(memoWithoutHeader);
-	const bpmSections = splitIntoBPMSections(stripHeader(memo));
+	let processedMemo = stripHeader(memo);
+	processedMemo = mergeSplitBeats(processedMemo);
+	processedMemo = trimEmptyBars(processedMemo);
+	const sections = splitIntoSections(processedMemo);
+	const bpmSections = splitIntoBPMSections(processedMemo);
 	sectionTimings = [];
 	sectionOffsets = [0];
 	if (bpmSections.length > 0) {
@@ -412,7 +461,7 @@ function parseMemo(memo: string, parsedFileName: string): Memson {
 			calculateTimingsForSection(bpmSection);
 		}
 	} else {
-		calculateTimingsForSection(memoWithoutHeader, memson.minBpm);
+		calculateTimingsForSection(processedMemo, memson.minBpm);
 	}
 	memson.charts[diffCat].ticks = extractTimings(memson.minBpm, sections);
 	const { noteCount, holdCount } = countNotes(memson.charts[diffCat].ticks);
@@ -453,6 +502,7 @@ if (process.argv.length < 3) {
 
 const filepath = resolve(process.argv[2]);
 const stats = lstatSync(filepath);
+const start = process.hrtime.bigint();
 
 if (stats.isDirectory()) {
 	const entries = readdirSync(filepath, { withFileTypes: true });
@@ -461,10 +511,15 @@ if (stats.isDirectory()) {
 		if (entry.isFile() && (entry.name.endsWith('.memo') || entry.name.endsWith('.txt'))) {
 			parseAndWrite(join(filepath, entry.name), process.argv[4] === 'true');
 			console.log(`Parsed ${entry.name}`);
+			count++;
 		}
 	}
 } else {
 	parseAndWrite(filepath, process.argv[4] === 'true');
+	count++;
 }
 
+const end = process.hrtime.bigint();
+
 console.log('Parsed sucessfully. Fields "offset", "jacket" and "audio" need to be filled in manually.');
+console.log(`Processing of ${count} files took ${Math.round(Number((end - start) / BigInt(1_000_000)))}ms`)
